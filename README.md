@@ -3,4 +3,4 @@ Network Graph Solutions for Data Pipeline Diagnostics - A network graph for inte
 
 Please see the example .html work-through file for demonstration of the examples seen in the poster.
 
-Gerlovin H, Robb WR, Ferolito BR, Ho YL, Gagnon DR, Cho K. _Network Graph Solutions for Data Pipeline Diagnostics. _March 2024. AMIA 2024 Informatics Summit, Boston, Massachusetts. Poster P77.
+Gerlovin H, Robb WR, Ferolito BR, Ho YL, Gagnon DR, Cho K. _Network Graph Solutions for Data Pipeline Diagnostics._ March 2024. AMIA 2024 Informatics Summit, Boston, Massachusetts. Poster P77.
