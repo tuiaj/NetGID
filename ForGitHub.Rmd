@@ -16,7 +16,7 @@ Gerlovin H, Robb WR, Ferolito BR, Ho YL, Gagnon DR, Cho K. _Network Graph Soluti
 
 ```{r setup, message=FALSE, warning=FALSE, echo=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-knitr::opts_knit$set(root.dir = 'C:/Users/VHABHSGERLOH/OneDrive - Department of Veterans Affairs/VA Causal/DataTeam/WorksInProgress')
+knitr::opts_knit$set(root.dir = '[SetLocationAccordingly]')
 
 library(readxl)
 library(webshot)
@@ -24,10 +24,8 @@ library(ggplot2)
 library(data.table)
 library(DT)
 
-set.dir <- 'C:/Users/VHABHSGERLOH/OneDrive - Department of Veterans Affairs/VA Causal/DataTeam/WorksInProgress'
+set.dir <- '[SetLocationAccordingly]'
 
-# if running this within the R IDE and not knitting, can set the wd as follows
-# setwd('C:/Users/VHABHSGERLOH/OneDrive - Department of Veterans Affairs/VA Causal/DataTeam/WorksInProgress')
 ```
 
 The first step in most reproducible research is to show the R packages being used.
