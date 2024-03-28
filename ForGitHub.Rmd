@@ -5,27 +5,44 @@ date: "`r Sys.Date()`"
 output: 
   html_document:
     toc: TRUE
+    df_print: paged
+    code_folding: show
+    theme: paper
 ---
-<!-- liberally lifting lines from H.'s TestSpace.Rmd -->
-\toc
-
 
 This HTML file is based on an RMD used for making the network objects seen in the poster:
 
 Gerlovin H, Robb WR, Ferolito BR, Ho YL, Gagnon DR, Cho K. _Network Graph Solutions for Data Pipeline Diagnostics._ March 2024. AMIA 2024 Informatics Summit, Boston, Massachusetts. Poster P77.
 
+
+\toc
+
+
 ```{r setup, message=FALSE, warning=FALSE, echo=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-knitr::opts_knit$set(root.dir = '[SetLocationAccordingly]')
+set.dir <- getwd(); #set.dir
+knitr::opts_knit$set(root.dir = paste0(set.dir))
 
-library(readxl)
-library(webshot)
-library(ggplot2)
-library(data.table)
-library(DT)
-
-set.dir <- '[SetLocationAccordingly]'
-
+# folding the output from: https://github.com/rstudio/rmarkdown/issues/1453
+hooks = knitr::knit_hooks$get()
+hook_foldable = function(type) {
+  force(type)
+  function(x, options) {
+    res = hooks[[type]](x, options)
+    
+    if (isFALSE(options[[paste0("fold.", type)]])) return(res)
+    
+    paste0(
+      "<details><summary>", type, "</summary>\n\n",
+      res,
+      "\n\n</details>"
+    )
+  }
+}
+knitr::knit_hooks$set(
+  output = hook_foldable("output"),
+  plot = hook_foldable("plot")
+)
 ```
 
 The first step in most reproducible research is to show the R packages being used.
@@ -36,6 +53,11 @@ library(shiny) # for reactive interactive plots
 library(visNetwork) # for interactive network plots
 library(igraph) # for network graph functions, including path-finding
 library(reshape2) # for data manipulation
+library(readxl) # for reading in data
+library(ggplot2) # for plotting
+library(data.table) # for data manipulation
+library(DT) # for nice data tables in html
+
 ```
 
 
@@ -63,10 +85,46 @@ colorPal <- c("red","orange","lightskyblue","steelblue",
 
 ### Node and Edge Attributes
 
-Inspect the structure of the current node and edge attributes.
+##### Inspect the structure of `nodes`
 
-```{r data_prep}
+
+The `nodes` dataframe contains all of the data inputs and outputs, as well as, programs (or "Code") required in the data curation pipeline. This table serves to both provide input for the network graph (sometimes known as "vertices") and assign attributes to the specific nodes to use in the visualization (e.g. grouping by color and shape).
+Dataframe `nodes` column descriptions:
+
+- `id` - the "D" or "P" identifier code for the nodes
+- `label` - the label for the node to use when printing
+- `type` - possible options are "Data" and "Code"
+- `nodesubtype` - possible options are "SAS" and "SQL"
+- `group` - the groupings used for this example, values are: 
+  1. SQL Program - code used for extracting and manipulating data within the SQL servers
+  2. SAS Program - code used for extracting and manipulating data within the SAS and SQL servers
+  3. Shared Phenotypes - data from common data model tables, or tables with data that have already been pre-digested in the research environment to a standardized format
+  4. EHR Metadata - data sourced from the VA’s corporate data warehouse, further split into metadata (DIM) and fact (Data) tables and stored in SQL servers
+  5. EHR Source Data - *see above*
+  6. Claims Data - data from the Centers for Medicare and Medicaid, which are administrative claims linked to the Veterans for billing purposes, and stored in SAS format
+  7. Project-specific Data - tables created in the process of this data pipeline, and all of these are produced by a Code node in this network
+- `shape` - already-applied shapes for the groupings (dot=Code nodes, square=Data nodes)
+- `title` - this is what will be displayed in the 'hover-over' action when looking at the interactive visualization
+- `color` - already-applied color palette to the groups of interest
+- `R_timestamp` - time-stamp for the data creation date or last execution date of a particular program
+
+```{r nodes_check}
+summary(nodes)
+
 DT::datatable(head(nodes))
+```
+
+##### Inspect the structure of `edges`
+
+The `edges` dataframe contains all of the single-distance connections between any pair of nodes in the directed network. That is, the complete set of direct input-output or from-to pairs of nodes that exist in the codebase pipeline. 
+Dataframe `edges` column descriptions:
+
+- `from` - the source or input node, can take any value of `nodes$id` 
+- `to` - the target or output node, can take any value of `nodes$id` 
+- `id` - numeric identifier used in the indexing of edges
+
+```{r edges_check}
+summary(edges)
 
 DT::datatable(head(edges))
 
@@ -79,6 +137,7 @@ object for graph feature interrogation & manipulation.
 Steps include:
 
 - setting up the legend for nodes based on the assigned groups from the data
+  - note the use of `"\n"` to indicate hard return/line breaks for visualization purposes
 - specifying the direction of the arrows
 - setting the seed to ensure we get the same layout each time
 
@@ -112,7 +171,7 @@ basic_graph <- plot_network(nodes,edges,111,"layout_with_dh",
                             pw=c("800px"), ph=c("800px"),
                             fsize=25) %>%
     visInteraction(dragNodes = T, multiselect = T) %>%
-    visLegend(width = 0.1, 
+    visLegend(width = 0.2, 
             position = "right", 
             main = list(text="Node Type",
                         style="font-family:Georgia, Times New Roman, Times, serif;font-weight:bold;font-size:12px;text-align:center;"),
@@ -281,6 +340,7 @@ plot19nodes <- nodes %>% mutate(color=case_when(id == "P019" ~ "red", # target n
                                                 TRUE ~ "grey"))
 
 # Now, deal with edges
+# source for the looping of objects with the get.edge.ids function: https://stackoverflow.com/questions/69889608/r-return-list-of-edges-of-all-simple-paths
 path_edges <- unlist(
   lapply(all_simple_paths(ig_dat, "P019", mode="in"),   
          function(x)
@@ -298,13 +358,13 @@ Make the plot with a new legend to indicate the path nodes.
 
 ```{r allpaths}
 # Data frame to build legend for nodes
-lnodes2 <- data.frame(label = c("Shared\n Phenotypes",
+lnodes2 <- data.frame(label = c("Target\n Node", "Path\n Nodes", 
+                                "Shared\n Phenotypes",
                                "EHR\n Metadata","EHR\n Source\n Data","Claims\n Data",
-                               "Project-\nspecific\n Data",
-                               "Path\n Nodes", "Target\n Node"
+                               "Project-\nspecific\n Data"
                                ),
                      shape = c(rep("square",7)),
-                     color = c(colorPal[3:7],"orange","red"),
+                     color = c("red","orange",colorPal[3:7]),
                      id = 1:7
                      ,size=rep(20,7)
                      ,style = rep("font-family:Georgia, Times New Roman, Times, serif;font-weight:bold;font-size:30px;text-align:center;",7)
@@ -319,7 +379,7 @@ detail_plot <- visNetwork(plot19nodes, plot19edges,
   visNodes(color = list(background = "color", border = "color"),
            font = list(size=0)) %>%
   visEdges(arrows = 'to', smooth = list(enabled = T)) %>%
-   visLegend(width = 0.1, 
+   visLegend(width = 0.2, 
             position = "right", 
             addNodes = lnodes2,
             useGroups = F)  
