@@ -182,6 +182,8 @@ basic_graph <- plot_network(nodes,edges,111,"layout_with_dh",
 # Nothing special, this is our base-case network that we "keep" for the backend of the selection factors
 basic_graph  
 
+?plot_network
+
 ```
 
 

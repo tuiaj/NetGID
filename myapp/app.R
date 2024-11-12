@@ -2,6 +2,7 @@
 # Setup the basic server components ###################
 ####
 library(shiny)
+library(shinylive)
 
 server <- function(input, output, session) {
   
