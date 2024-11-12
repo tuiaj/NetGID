@@ -1,0 +1,16 @@
+"0","plot_network
+"
+"1","function(nodes, edges, seedset, layout_spec, pw, ph, fsize) {
+"
+"1","  visNetwork(nodes, edges, width=pw, height=ph) %>%
+"
+"1","  # network layout by the igraph package
+"
+"1","  visIgraphLayout(randomSeed = seedset, layout = layout_spec) %>%
+"
+"1","    visNodes(font = list(size=fsize, border =""grey"")) %>%
+"
+"1","    visEdges(color = list(color=""black""), arrows = 'to') 
+"
+"1","}
+"

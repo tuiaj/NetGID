@@ -1,0 +1,4 @@
+"0","library(DT) # for nice data tables in html
+"
+"2","Error in library(DT) : there is no package called ‘DT’
+"

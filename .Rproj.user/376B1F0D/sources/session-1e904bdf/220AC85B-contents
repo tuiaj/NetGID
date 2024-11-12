@@ -1,0 +1,497 @@
+---
+title: "NetGID - Network Graph for Interactive Diagnostics"
+author: "HGerlovin & WRobb"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: TRUE
+    df_print: paged
+    code_folding: show
+    theme: paper
+---
+
+This HTML file is based on an RMD used for making the network objects seen in the poster:
+
+Gerlovin H, Robb WR, Ferolito BR, Ho YL, Gagnon DR, Cho K. _Network Graph Solutions for Data Pipeline Diagnostics._ March 2024. AMIA 2024 Informatics Summit, Boston, Massachusetts. Poster P77.
+
+
+\toc
+
+
+```{r setup, message=FALSE, warning=FALSE, echo=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+set.dir <- getwd(); #set.dir
+knitr::opts_knit$set(root.dir = paste0(set.dir))
+
+# folding the output from: https://github.com/rstudio/rmarkdown/issues/1453
+hooks = knitr::knit_hooks$get()
+hook_foldable = function(type) {
+  force(type)
+  function(x, options) {
+    res = hooks[[type]](x, options)
+    
+    if (isFALSE(options[[paste0("fold.", type)]])) return(res)
+    
+    paste0(
+      "<details><summary>", type, "</summary>\n\n",
+      res,
+      "\n\n</details>"
+    )
+  }
+}
+knitr::knit_hooks$set(
+  output = hook_foldable("output"),
+  plot = hook_foldable("plot")
+)
+```
+
+The first step in most reproducible research is to show the R packages being used.
+```{r load_packages, results='hide', message=FALSE, warning=FALSE}
+# load the necessary packages
+library(tidyverse) # for data manipulation
+library(shiny) # for reactive interactive plots
+library(visNetwork) # for interactive network plots
+library(igraph) # for network graph functions, including path-finding
+library(reshape2) # for data manipulation
+library(readxl) # for reading in data
+library(ggplot2) # for plotting
+library(data.table) # for data manipulation
+library(DT) # for nice data tables in html
+
+```
+
+
+## Inputs and working example
+
+### Load network data from the saved objects
+
+In our case, there was a lot of cleaning and post-processing of the data. Here, we provide the corresponding objects used in the examples here:
+
+- `nodes` - a dataframe with node identifiers, attributes, and graphical parameters.
+- `edges` - a dataframe with edge identifiers, and the "to" and "from" nodes connected by the edge (`node$id`).
+- `nodexCols` - a dataframe data dictionary of all the columns or variables found in each of the 'Data' nodes. this feeds into the shiny app when inspecting the variables of a given dataset, and further opening the door for variable tracing.
+- `all_inout` - a dataframe of programs with the input and output datasets listed. this feeds into the edgelist, but provides an alternate tabular organization that is later exploited in the shiny app.
+
+Additionally, we provide the color palette for the primary groups in the main visualization.
+
+```{r load_data}
+load(paste0(set.dir,"/ExData.RData"))
+
+# Note - here is the color palette in use for the default visualization groupings
+colorPal <- c("red","orange","lightskyblue","steelblue",
+              "turquoise","royalblue","lightslateblue","grey")
+
+```
+
+### Node and Edge Attributes
+
+##### Inspect the structure of `nodes`
+
+
+The `nodes` dataframe contains all of the data inputs and outputs, as well as, programs (or "Code") required in the data curation pipeline. This table serves to both provide input for the network graph (sometimes known as "vertices") and assign attributes to the specific nodes to use in the visualization (e.g. grouping by color and shape).
+Dataframe `nodes` column descriptions:
+
+- `id` - the "D" or "P" identifier code for the nodes
+- `label` - the label for the node to use when printing
+- `type` - possible options are "Data" and "Code"
+- `nodesubtype` - possible options are "SAS" and "SQL"
+- `group` - the groupings used for this example, values are: 
+  1. SQL Program - code used for extracting and manipulating data within the SQL servers
+  2. SAS Program - code used for extracting and manipulating data within the SAS and SQL servers
+  3. Shared Phenotypes - data from common data model tables, or tables with data that have already been pre-digested in the research environment to a standardized format
+  4. EHR Metadata - data sourced from the VA’s corporate data warehouse, further split into metadata (DIM) and fact (Data) tables and stored in SQL servers
+  5. EHR Source Data - *see above*
+  6. Claims Data - data from the Centers for Medicare and Medicaid, which are administrative claims linked to the Veterans for billing purposes, and stored in SAS format
+  7. Project-specific Data - tables created in the process of this data pipeline, and all of these are produced by a Code node in this network
+- `shape` - already-applied shapes for the groupings (dot=Code nodes, square=Data nodes)
+- `title` - this is what will be displayed in the 'hover-over' action when looking at the interactive visualization
+- `color` - already-applied color palette to the groups of interest
+- `R_timestamp` - time-stamp for the data creation date or last execution date of a particular program
+
+```{r nodes_check}
+summary(nodes)
+
+DT::datatable(head(nodes))
+```
+
+##### Inspect the structure of `edges`
+
+The `edges` dataframe contains all of the single-distance connections between any pair of nodes in the directed network. That is, the complete set of direct input-output or from-to pairs of nodes that exist in the codebase pipeline. 
+Dataframe `edges` column descriptions:
+
+- `from` - the source or input node, can take any value of `nodes$id` 
+- `to` - the target or output node, can take any value of `nodes$id` 
+- `id` - numeric identifier used in the indexing of edges
+
+```{r edges_check}
+summary(edges)
+
+DT::datatable(head(edges))
+
+```
+
+### Setup the basic network graph 
+Our basecase network graph uses the visNetwork specifications for the majority of the graph features, and igraph is used to construct a simplified layout. We also create an iGraph data
+object for graph feature interrogation & manipulation.
+
+Steps include:
+
+- setting up the legend for nodes based on the assigned groups from the data
+  - note the use of `"\n"` to indicate hard return/line breaks for visualization purposes
+- specifying the direction of the arrows
+- setting the seed to ensure we get the same layout each time
+
+```{r visgraph_setup}
+
+# Data frame to build legend for nodes
+lnodes <- data.frame(label = c("SQL\n Program","SAS\n Program","Shared\n Phenotypes",
+                               "EHR\n Metadata","EHR\n Source\n Data","Claims\n Data",
+                               "Project-\nspecific\n Data"),
+                     shape = c(rep("dot",2),rep("square",5)),
+                     color = colorPal[1:7],
+                     id = 1:7
+                     ,size=rep(20,7)
+                     ,style = rep("font-family:Georgia, Times New Roman, Times, serif;font-weight:bold;font-size:35px;text-align:center;",7)
+                     )
+
+# build a plot function
+plot_network <- function(nodes, edges, seedset, layout_spec, pw, ph, fsize) {
+  visNetwork(nodes, edges, width=pw, height=ph) %>%
+  # network layout by the igraph package
+  visIgraphLayout(randomSeed = seedset, layout = layout_spec) %>%
+    visNodes(font = list(size=fsize, border ="grey")) %>%
+    visEdges(color = list(color="black"), arrows = 'to') 
+}
+
+```
+
+## Plot The Main Event
+```{r main_plot}
+basic_graph <- plot_network(nodes,edges,111,"layout_with_dh", 
+                            pw=c("800px"), ph=c("800px"),
+                            fsize=25) %>%
+    visInteraction(dragNodes = T, multiselect = T) %>%
+    visLegend(width = 0.2, 
+            position = "right", 
+            main = list(text="Node Type",
+                        style="font-family:Georgia, Times New Roman, Times, serif;font-weight:bold;font-size:12px;text-align:center;"),
+            addNodes = lnodes, 
+            useGroups = F)  
+
+
+# Nothing special, this is our base-case network that we "keep" for the backend of the selection factors
+basic_graph  
+
+```
+
+
+## Time for Diagnostics!
+
+### Explore the network using igraph
+
+Create an iGraph data structure from cleaned up edges & vertices data
+ (can run examples of iGraph functionality)
+
+```{r igdeg}
+# turn dataset into an igraph object
+ig_dat <- graph_from_data_frame(edges, directed=TRUE, vertices = nodes) 
+
+V(ig_dat)
+# Various things igraph can do:
+#  V(ig_dat) #nodes
+#  E(ig_dat) #edges
+#  V(ig_dat)$color #checking attributes 
+#  vertex.attributes(ig_dat)
+#  edge.attributes(ig_dat)
+#  igraph::degree(ig_dat); 
+```
+
+### Identify extraneous datasets
+
+Note which data nodes do not feed back into the pipeline, that is, nodes which have an out degree of zero. Highlight in red and evaluate for space considerations.
+```{r igUnused}  
+
+unused_dat <- c(names(which(igraph::degree(ig_dat,mode="out")==0))) 
+
+# create version of graph with updated node color for unused datasets
+nodes2 <- nodes %>%
+  mutate(shape = case_when(id %in% unused_dat ~ "star", # change the shape for these nodes
+                           TRUE ~ shape)) %>%
+  mutate(color = case_when(id %in% unused_dat ~ "red", # set all the nodes to grey and then highlight these in red
+                           TRUE ~ "grey")) %>%
+  mutate(size = case_when(id %in% unused_dat ~ 50,
+                           TRUE ~ 30))          %>%
+  rename(group2="group") %>% # recreate the 'group' variable to ensure there is an eighth shape plotted
+  mutate(group = case_when(id %in% unused_dat ~ 8,
+                           TRUE ~ as.numeric(group2))) %>%
+  mutate(label = case_when(id %in% unused_dat ~ label,
+                           TRUE ~ ' ')) # only keep the labels (print-names) for the selected nodes
+
+# code from plot function unbundled so can tweak
+
+detail_plot <- visNetwork(nodes2, edges,width = "800px", height = "800px") %>%
+  
+  # network layout by the igraph package
+  visIgraphLayout(randomSeed = 111, layout = "layout_with_dh"
+  ) %>%
+  visNodes(color = list(background = "color", border = "color"), 
+           font = list(size=32
+                       #, border="grey"
+                       )) %>%
+  visEdges(color = list(color="black"), arrows = 'to', smooth = list(enabled = T)
+  ) %>%
+  visLegend(width = 0.1, 
+            position = "right", 
+            addNodes = list(
+              list(label = c('Unused\n Data'), shape="star", color="red")
+            ),
+            useGroups = F)  
+
+# now view it
+detail_plot
+```
+
+
+###  Discover wrong table being used, find the affected paths to update
+This is a functionality that can be applied to find the path between any pair of nodes, starting with the green node and following the paths to the final node in red. This only functions for paths that start with the first node and end with the second node, that is, if the first node sequentially precedes the second node, there will be no path returned.
+
+```{r look_ahead}
+
+#D020 is meds_foradjudication_v1_reviewed
+#P053 is make_final_analytic
+# Going in the direction of the flow only
+asp <- all_simple_paths(ig_dat, from="D020", to="P053")
+
+#get nodes along the path
+path_nodes <- unique(names(unlist(asp)))
+
+# color nodes along path, start and end, etc.
+new_nodes <- nodes %>% mutate(color=case_when(id == "D020" ~ "green", # starting node
+                                                id == "P053" ~ "red", # ending node
+                                                id %in% path_nodes ~ "orange", # all other nodes in the path
+                                                TRUE ~ "grey")) %>%
+  # remove label for everything not touching the nodes on the path
+  mutate(label = case_when(id %in% path_nodes ~ label, TRUE ~ ' '))
+
+path_edges <-  unlist(
+  lapply(all_simple_paths(ig_dat,from=c("D020"),to=c("P053")),
+         function(x)
+           get.edge.ids(ig_dat, c(rbind(head(x,-1),x[-1])))
+  ))
+
+# Recolor the edges to make the selected ones red
+new_edges <- edges %>% 
+  mutate(color = case_when(id %in% path_edges ~ "red", TRUE ~ "grey"))  %>% 
+  mutate(width = case_when(id %in% path_edges ~ 10, TRUE ~ 2))
+
+```
+
+
+Make the plot for the example
+
+```{r hgpath}
+
+# Re-plot graph.  Note same seed to get same basic shape ... more abstract version
+# code from plot function unwrapped so can tweak
+
+detail_plot <- visNetwork(new_nodes, new_edges, width = "800px", height = "800px") %>%
+  visIgraphLayout(randomSeed = 111, layout = "layout_with_dh") %>%
+  visNodes(color = list(background = "color", border = "color"),
+           font = list(size=32)) %>%
+  visEdges(arrows = 'to', smooth = list(enabled = T)) %>%
+  visLegend(width = 0.1, 
+            position = "right", 
+            addNodes = list(
+              list(label = c("Start Node"), shape="square", color="green"),
+              list(label = "Path Node", shape="dot", color="orange"),
+              list(label="End Node", shape="dot", color="red")
+            ),
+            useGroups = F)  
+
+
+# now view it
+detail_plot
+```
+
+
+### Finding All Paths to A Single Node
+
+Cohort Creation as a specific example. This sets up the approach for tracing variables through the paths of construction.
+ 
+```{r traceback2}
+# In the all_simple_paths() call:
+#   - Default "to" list is all nodes in graph
+#   - Mode parameter reverses direction, essentially swapping 'from' and 'to'.
+# So these two lines give us all nodes that lead to P019 (cohort creation)
+#
+all_paths_to19 <- all_simple_paths(ig_dat, "P019", mode = c("in"))
+
+#all_paths_to19[1:20]
+
+# Then get an deduplicated list of node names (not IDs) that are implicated in all of these paths.
+path_nodes <- unique(names(unlist(all_paths_to19)))
+
+# Find the implicated nodes that are sources (starting points) in this network
+src_nodes <- names(which(degree(ig_dat,v=path_nodes,mode="in")==0))
+
+# color nodes along path, start and end, etc.
+plot19nodes <- nodes %>% mutate(color=case_when(id == "P019" ~ "red", # target node is red
+                                                id %in% src_nodes ~ color, # nodes as sources, use the original color
+                                                id %in% path_nodes ~ "orange", 
+                                                TRUE ~ "grey"))
+
+# Now, deal with edges
+# source for the looping of objects with the get.edge.ids function: https://stackoverflow.com/questions/69889608/r-return-list-of-edges-of-all-simple-paths
+path_edges <- unlist(
+  lapply(all_simple_paths(ig_dat, "P019", mode="in"),   
+         function(x)
+            get.edge.ids(ig_dat, c(rbind(names(x)[-1],head(names(x),-1))))
+  )
+)
+
+plot19edges <- edges  %>% 
+  mutate(color = case_when(id %in% path_edges ~ "red", TRUE ~ "grey")) %>% # color the implicated edges in red
+  mutate(width = case_when(id %in% path_edges ~ 10, TRUE ~ 2))
+```
+
+
+Make the plot with a new legend to indicate the path nodes.
+
+```{r allpaths}
+# Data frame to build legend for nodes
+lnodes2 <- data.frame(label = c("Target\n Node", "Path\n Nodes", 
+                                "Shared\n Phenotypes",
+                               "EHR\n Metadata","EHR\n Source\n Data","Claims\n Data",
+                               "Project-\nspecific\n Data"
+                               ),
+                     shape = c(rep("square",7)),
+                     color = c("red","orange",colorPal[3:7]),
+                     id = 1:7
+                     ,size=rep(20,7)
+                     ,style = rep("font-family:Georgia, Times New Roman, Times, serif;font-weight:bold;font-size:30px;text-align:center;",7)
+                     )
+
+
+detail_plot <- visNetwork(plot19nodes, plot19edges,
+                          width = "800px", height = "800px") %>%
+  # network layout by the igraph package
+  visIgraphLayout(randomSeed = 111, layout = "layout_with_dh") %>%
+  # Zero font to turn off labels, 
+  visNodes(color = list(background = "color", border = "color"),
+           font = list(size=0)) %>%
+  visEdges(arrows = 'to', smooth = list(enabled = T)) %>%
+   visLegend(width = 0.2, 
+            position = "right", 
+            addNodes = lnodes2,
+            useGroups = F)  
+
+# now view it
+detail_plot
+```
+
+
+*****
+## Now Let's Bring in Shiny
+
+First, we setup the nice tables for easy access in the app. Recall that these already exist in our loaded .RData files.
+
+```{r build_shiny}
+## LOOK AT THE ATTRIBUTE TABLES
+
+# Inputs and Outputs from the Code Nodes (indexed by select_id)
+DT::datatable(all_inout)
+
+# Variables/columns in the Data Nodes (indexed by id)
+DT::datatable(nodexCols)
+```
+
+
+Next, load up the shiny application with corresponding functionalities
+
+NOTE: All of the steps below are merely shown on the Rmd/html and not executed. These should be taken and incorporated into a separate program, assuming all the necessary data points and steps have been followed.
+
+Need to run this separately to create the app. Here is the code!
+
+```{r shiny_start, eval=FALSE}
+####
+# Setup the basic server components ###################
+####
+
+server <- function(input, output, session) {
+  
+  output$network <- renderVisNetwork({
+    
+      plot_network(nodes, edges, 111, "layout_with_dh",
+                   pw="100%", ph="100%", fsize=24) %>%
+      visOptions(nodesIdSelection = T) %>%
+      visExport()
+  })
+
+  #when user picks a node on the graph ...
+  observeEvent(input$network_selected, {
+    
+    if (is.character(input$network_selected) && nchar(input$network_selected) > 0) {
+      selectedNodeId <- input$network_selected
+      
+      nodes$R_timestamp <- format(nodes$R_timestamp,'%Y-%m-%dT%H:%M:%S+000')
+      
+      # Get and display node info
+      selectedNodeInfo <- nodes %>%
+        filter(id == selectedNodeId) %>%
+        select(all_of(c("id","label","type","nodesubtype",
+                        "group","R_timestamp")))
+      
+      output$nodeInfo <- renderTable({
+        selectedNodeInfo
+      })
+      
+      # get and display multiple attribute info; built table in/out list for code,cols for data
+      if (nodes[nodes$id == selectedNodeId, "type"] == "Code") {
+        selectedAttrInfo <- all_inout         %>%
+          filter(select_id == selectedNodeId)  %>%
+          select(all_of(c("id","label","in_out",
+                          "nodesubtype","group","R_timestamp")))
+      }
+      if (nodes[nodes$id == selectedNodeId, "type"] == "Data") {
+        selectedAttrInfo <- nodexCols %>%
+          filter(id == selectedNodeId) 
+      }
+      output$multAttrInfo <- renderDataTable({
+        selectedAttrInfo
+      })
+    }
+  })
+  session$onSessionEnded(function() {stopApp()}) # added due to continuous crashing
+}
+
+####
+# Setup the basic UI components #################################
+####
+
+ui <- fluidPage(
+  fluidRow(
+    column(12, 
+           tags$h2("Codebase Network Graph - Select a Node to see attributes"),
+           visNetworkOutput("network")
+    )
+  ),
+  fluidRow(
+    column(12,
+           tags$h2("Node Attributes"),
+           tableOutput("nodeInfo")      
+    )
+  ),
+  fluidRow(
+    column(12,
+           tags$h2("List Attributes for Node"),
+           dataTableOutput("multAttrInfo")
+    )
+  )
+)
+
+####
+# Make our first Shiny! ###################################
+####
+
+shinyApp(ui, server)
+```

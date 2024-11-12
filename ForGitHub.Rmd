@@ -196,6 +196,7 @@ Create an iGraph data structure from cleaned up edges & vertices data
 # turn dataset into an igraph object
 ig_dat <- graph_from_data_frame(edges, directed=TRUE, vertices = nodes) 
 
+V(ig_dat)
 # Various things igraph can do:
 #  V(ig_dat) #nodes
 #  E(ig_dat) #edges
